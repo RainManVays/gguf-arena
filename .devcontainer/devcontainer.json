@@ -1,0 +1,19 @@
+{
+  "name": "gguf-arena",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+  "initializeCommand": "xhost +local:",
+  "postCreateCommand": "apt-get update && apt-get install -y python3-tk",
+  "postStartCommand": "pip install -q -r /workspace/requirements.txt",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3"
+      }
+    }
+  }
+}

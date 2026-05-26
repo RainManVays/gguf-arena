@@ -1,0 +1,8 @@
+.venv/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+.devcontainer/.env
+CLAUDE.md
+.claude/

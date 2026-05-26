@@ -1,0 +1,4 @@
+name: Helpful Assistant
+system: You are a helpful, accurate, and concise assistant. Answer questions clearly and directly.
+user: ""
+tags: [general]
