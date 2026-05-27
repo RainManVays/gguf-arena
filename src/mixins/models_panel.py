@@ -85,6 +85,7 @@ class ModelsPanelMixin:
         if not folder.is_dir():
             ctk.CTkLabel(self._models_scroll, text="No folder selected",
                          font=_FONT_SMALL, text_color="#777777").pack(anchor="w", pady=4)
+            self._rebind_scroll_wheel(self._models_scroll)
             return
 
         pattern = "**/*.gguf" if self._recursive_var.get() else "*.gguf"
@@ -93,6 +94,7 @@ class ModelsPanelMixin:
         if not files:
             ctk.CTkLabel(self._models_scroll, text="No .gguf files found",
                          font=_FONT_SMALL, text_color="#777777").pack(anchor="w", pady=4)
+            self._rebind_scroll_wheel(self._models_scroll)
             return
 
         log.info("Found %d model(s) in %s", len(files), folder)
@@ -107,6 +109,7 @@ class ModelsPanelMixin:
             ctk.CTkCheckBox(self._models_scroll, text=display, variable=var,
                             font=_FONT_SMALL).pack(anchor="w", pady=2)
             self.model_vars[str(f)] = var
+        self._rebind_scroll_wheel(self._models_scroll)
 
     def _add_model_file(self) -> None:
         path = filedialog.askopenfilename(

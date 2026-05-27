@@ -22,9 +22,10 @@ class HistoryMixin:
             ctk.CTkLabel(self._history_scroll, text="No runs yet.",
                          font=_FONT_SMALL, text_color="#666666").pack(
                 anchor="w", padx=8, pady=8)
-            return
-        for entry in history:
-            self._add_history_card(entry)
+        else:
+            for entry in history:
+                self._add_history_card(entry)
+        self._rebind_scroll_wheel(self._history_scroll)
 
     def _add_history_card(self, entry: dict) -> None:
         card = ctk.CTkFrame(self._history_scroll)

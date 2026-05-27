@@ -131,6 +131,7 @@ class BatchMixin:
 
         scroll = ctk.CTkScrollableFrame(tab)
         scroll.grid(row=1, column=0, sticky="nsew")
+        self._setup_scroll_wheel(scroll)
 
         model_names = [m["name"] for m in self._batch_run_results[0]["models"]]
 
@@ -169,6 +170,7 @@ class BatchMixin:
                              wraplength=215, text_color=color).grid(
                     row=row, column=j+1, padx=4, pady=2, sticky="nw")
 
+        self._rebind_scroll_wheel(scroll)
         self._tabs.set("Batch")
 
     def _build_batch_judge_tab(self) -> None:

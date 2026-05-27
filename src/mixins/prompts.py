@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import tkinter as tk
 from tkinter import messagebox, simpledialog
 
 import customtkinter as ctk
@@ -67,30 +66,3 @@ class PromptsMixin:
         self._prompt_combo.configure(values=names)
         self._prompt_combo.set(names[0])
 
-    def _bind_text_keys(self, widget: ctk.CTkTextbox) -> None:
-        widget.bind("<Control-z>", self._undo_text)
-        widget.bind("<Control-y>", self._redo_text)
-        widget.bind("<Control-Z>", self._redo_text)  # Ctrl+Shift+Z
-
-    def _on_ctrl_a(self, event) -> str:
-        w = event.widget
-        if isinstance(w, tk.Entry):
-            w.select_range(0, "end")
-            w.icursor("end")
-        elif isinstance(w, tk.Text):
-            w.tag_add("sel", "1.0", "end")
-        return "break"
-
-    def _undo_text(self, event) -> str:
-        try:
-            event.widget.edit_undo()
-        except Exception:
-            pass
-        return "break"
-
-    def _redo_text(self, event) -> str:
-        try:
-            event.widget.edit_redo()
-        except Exception:
-            pass
-        return "break"

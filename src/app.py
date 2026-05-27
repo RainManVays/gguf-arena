@@ -16,6 +16,7 @@ from .mixins.judge import JudgeMixin
 from .mixins.models_panel import ModelsPanelMixin
 from .mixins.prompts import PromptsMixin
 from .mixins.run import RunMixin
+from .mixins.ui_rules import UIRulesMixin
 from .storage import (load_config, load_registry,
                       migrate_prompts_to_registry, save_config)
 
@@ -31,7 +32,7 @@ _FONT_BOLD  = ("Sans", 12, "bold")
 
 # ──────────────────────────────────────────────────────────────────────────────
 
-class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixin, RunMixin, BatchMixin, JudgeMixin, ctk.CTk):
+class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixin, RunMixin, BatchMixin, JudgeMixin, UIRulesMixin, ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("GGUF Arena")
@@ -96,8 +97,9 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
 
         self._build_left()
         self._build_right()
-        self.bind_class("Entry", "<Control-a>", self._on_ctrl_a)
-        self.bind_class("Text",  "<Control-a>", self._on_ctrl_a)
+        self._activate_ui_rules()
+        self._setup_scroll_wheel(self._models_scroll)
+        self._setup_scroll_wheel(self._history_scroll)
 
     # ── Left panel ────────────────────────────────────────────────────────────
 
@@ -267,7 +269,7 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
         self._sys_text = ctk.CTkTextbox(top, height=85, wrap="word", font=_FONT_MONO,
                                         undo=True)
         self._sys_text.grid(row=1, column=0, sticky="ew", pady=(2, 6))
-        self._bind_text_keys(self._sys_text)
+        self._bind_textbox(self._sys_text)
         self._sys_text.bind("<KeyRelease>", self._update_token_counter)
         self._ctx_var.trace_add("write", lambda *_: self._update_token_counter())
 
@@ -299,7 +301,7 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
         self._user_text = ctk.CTkTextbox(top, height=110, wrap="word", font=_FONT_MONO,
                                          undo=True)
         self._user_text.grid(row=3, column=0, sticky="ew", pady=(2, 2))
-        self._bind_text_keys(self._user_text)
+        self._bind_textbox(self._user_text)
         self._user_text.bind("<KeyRelease>", self._update_token_counter)
 
         reg = load_registry()
