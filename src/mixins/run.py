@@ -10,11 +10,14 @@ import customtkinter as ctk
 from ..mdrender import render as _md_render
 from ..runner import run_model, truncate_user_input
 from ..storage import append_history, make_history_entry
+from ..theme import (
+    FONT_MONO as _FONT_MONO, FONT_SMALL as _FONT_SMALL,
+    CLR_PRIMARY, CLR_PRIMARY_HOV,
+    CLR_DISABLED, CLR_DISABLED_HOV, CLR_DISABLED_TB,
+    CLR_TXT_FAINT, CLR_TXT_DIM, CLR_TXT_MUTED, CLR_ERR,
+)
 
 log = logging.getLogger(__name__)
-
-_FONT_MONO  = ("Monospace", 12)
-_FONT_SMALL = ("Sans", 11)
 
 
 class RunMixin:
@@ -39,7 +42,7 @@ class RunMixin:
         fname = Path(path).name
         n = len(cases)
         self._batch_info_lbl.configure(
-            text=f"{fname} · {n} case{'s' if n != 1 else ''}", text_color="#aaaaaa")
+            text=f"{fname} · {n} case{'s' if n != 1 else ''}", text_color=CLR_TXT_MUTED)
         self._batch_clear_btn.grid(row=0, column=3, padx=(4, 0))
         self._set_batch_mode(True)
 
@@ -52,11 +55,11 @@ class RunMixin:
     def _set_batch_mode(self, active: bool) -> None:
         self._batch_mode = active
         if active:
-            self._user_text.configure(state="disabled", fg_color=("#303030", "#252525"))
-            self._single_btn.configure(fg_color="#444444", hover_color="#555555")
+            self._user_text.configure(state="disabled", fg_color=CLR_DISABLED_TB)
+            self._single_btn.configure(fg_color=CLR_DISABLED, hover_color=CLR_DISABLED_HOV)
         else:
             self._user_text.configure(state="normal", fg_color=("gray86", "gray17"))
-            self._single_btn.configure(fg_color="#1f6aa5", hover_color="#1a5a8a")
+            self._single_btn.configure(fg_color=CLR_PRIMARY, hover_color=CLR_PRIMARY_HOV)
 
     def _on_toggle_single(self) -> None:
         if self._batch_mode:
@@ -217,7 +220,7 @@ class RunMixin:
             footer.grid_columnconfigure(0, weight=1)
 
             stat = ctk.CTkLabel(footer, text="⏳ Waiting…",
-                                font=_FONT_SMALL, text_color="#777777", anchor="w")
+                                font=_FONT_SMALL, text_color=CLR_TXT_FAINT, anchor="w")
             stat.grid(row=0, column=0, sticky="ew", padx=8)
 
             ctk.CTkButton(footer, text="Copy", width=60, height=24,
@@ -250,7 +253,7 @@ class RunMixin:
                     self.after(0, lambda t=status_txt: self._status_lbl.configure(text=t))
                     self.after(0, lambda n=name: self._tabs.set(n))
                     self.after(0, lambda n=name: self._model_widgets[n][1].configure(
-                        text="⏳ Generating…", text_color="#aaaaaa"))
+                        text="⏳ Generating…", text_color=CLR_TXT_MUTED))
 
                     def _on_proc(proc, n=name) -> None:
                         self._current_proc = proc
@@ -282,7 +285,7 @@ class RunMixin:
                                 parts.append(f"{r['tps']:.1f} tok/s")
                             if r.get("n_tokens"):
                                 parts.append(f"{r['n_tokens']} tokens")
-                            stat.configure(text="  ".join(parts), text_color="#888888")
+                            stat.configure(text="  ".join(parts), text_color=CLR_TXT_DIM)
                         else:
                             err = r.get("error", "Unknown error")
                             partial = r.get("output", "")
@@ -291,7 +294,7 @@ class RunMixin:
                                 text += f"\n\n── partial output ──\n{partial}"
                             text += f"\n\n── stderr ──\n{r.get('stderr', '')}"
                             tb.insert("end", text)
-                            stat.configure(text=f"✗ {err}", text_color="#cc4444")
+                            stat.configure(text=f"✗ {err}", text_color=CLR_ERR)
                         tb.configure(state="disabled")
 
                     self.after(0, _update)

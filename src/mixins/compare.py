@@ -4,9 +4,11 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-_FONT_MONO  = ("Monospace", 12)
-_FONT_SMALL = ("Sans", 11)
-_FONT_BOLD  = ("Sans", 12, "bold")
+from ..theme import (
+    FONT_MONO as _FONT_MONO, FONT_SMALL as _FONT_SMALL, FONT_BOLD as _FONT_BOLD,
+    FONT_TINY,
+    CLR_CANVAS_BG, CLR_PRIMARY, CLR_TXT_NORMAL, CLR_TXT_MUTED,
+)
 
 
 class CompareMixin:
@@ -53,7 +55,7 @@ class CompareMixin:
         tab.grid_rowconfigure(0, weight=1)
         tab.grid_columnconfigure(0, weight=1)
 
-        canvas = tk.Canvas(tab, bg="#2b2b2b", highlightthickness=0)
+        canvas = tk.Canvas(tab, bg=CLR_CANVAS_BG, highlightthickness=0)
         canvas.grid(row=0, column=0, sticky="nsew")
 
         def _draw(event=None):
@@ -73,15 +75,15 @@ class CompareMixin:
                 bar_w = int(r["tps"] / max_tps * bar_area)
                 canvas.create_rectangle(
                     pad_left, y - 10, pad_left + bar_w, y + 10,
-                    fill="#1f6aa5", outline="")
+                    fill=CLR_PRIMARY, outline="")
                 label = r["name"][:36]
                 canvas.create_text(
                     pad_left - 8, y, text=label, anchor="e",
-                    fill="#cccccc", font=("Sans", 10))
+                    fill=CLR_TXT_NORMAL, font=FONT_TINY)
                 canvas.create_text(
                     pad_left + bar_w + 6, y,
                     text=f"{r['tps']:.1f} tok/s", anchor="w",
-                    fill="#aaaaaa", font=("Sans", 10))
+                    fill=CLR_TXT_MUTED, font=FONT_TINY)
 
         canvas.bind("<Configure>", _draw)
         canvas.after(50, _draw)

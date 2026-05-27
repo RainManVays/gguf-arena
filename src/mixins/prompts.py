@@ -4,6 +4,8 @@ from tkinter import messagebox, simpledialog
 
 import customtkinter as ctk
 
+from ..theme import CLR_OK, CLR_WARN, CLR_ERR
+
 from ..runner import _estimate_tokens
 from ..storage import (REGISTRY_DIR, _slug, delete_from_registry,
                        load_registry, save_to_registry)
@@ -20,7 +22,7 @@ class PromptsMixin:
         except ValueError:
             ctx = 0
         ratio = total / ctx if ctx > 0 else 0
-        color = "#44aa44" if ratio < 0.8 else ("#ddaa00" if ratio <= 1.0 else "#cc4444")
+        color = CLR_OK if ratio < 0.8 else (CLR_WARN if ratio <= 1.0 else CLR_ERR)
         ctx_str = f" / {ctx}" if ctx > 0 else ""
         self._tok_label.configure(
             text=f"SYS: ~{sys_tok}  USR: ~{user_tok}  Total: ~{total}{ctx_str} tok",

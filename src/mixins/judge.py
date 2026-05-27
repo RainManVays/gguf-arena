@@ -9,11 +9,14 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from ..storage import save_config
+from ..theme import (
+    FONT_MONO as _FONT_MONO, FONT_SMALL as _FONT_SMALL, FONT_TINY,
+    CLR_JUDGE, CLR_JUDGE_HOV,
+    CLR_CANVAS_BG, CLR_WIN, CLR_PRIMARY,
+    CLR_TXT_BRIGHT, CLR_TXT_NORMAL, CLR_TXT_MUTED, CLR_TXT_DIM, CLR_ERR,
+)
 
 log = logging.getLogger(__name__)
-
-_FONT_MONO  = ("Monospace", 12)
-_FONT_SMALL = ("Sans", 11)
 
 
 class JudgeMixin:
@@ -76,18 +79,18 @@ class JudgeMixin:
 
         self._judge_btn = ctk.CTkButton(
             ctrl, text="⚖ Judge", width=100, height=32,
-            fg_color="#4a3a7a", hover_color="#5a4a9a",
+            fg_color=CLR_JUDGE, hover_color=CLR_JUDGE_HOV,
             command=self._on_judge_run,
         )
         self._judge_btn.pack(side="left")
 
         self._judge_status = ctk.CTkLabel(
-            ctrl, text="", font=_FONT_SMALL, text_color="#888888")
+            ctrl, text="", font=_FONT_SMALL, text_color=CLR_TXT_DIM)
         self._judge_status.pack(side="left", padx=(10, 0))
 
         bar_height = len(successful) * 36 + 20
         self._judge_canvas = tk.Canvas(
-            tab, bg="#2b2b2b", highlightthickness=0, height=bar_height)
+            tab, bg=CLR_CANVAS_BG, highlightthickness=0, height=bar_height)
         self._judge_canvas.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 0))
         self._judge_canvas.bind("<Configure>", lambda _: self._redraw_judge_leaderboard())
 
@@ -116,7 +119,7 @@ class JudgeMixin:
             score = scores[name]
             y     = pad_top + i * row_h + row_h // 2
             bar_w = int(score / 100 * bar_area) if score > 0 else 0
-            color = "#c8a000" if name == winner else "#1f6aa5"
+            color = CLR_WIN if name == winner else CLR_PRIMARY
             canvas.create_rectangle(
                 pad_left, y - 12, pad_left + bar_w, y + 12,
                 fill=color, outline="")
@@ -125,14 +128,14 @@ class JudgeMixin:
                 pad_left - 8, y,
                 text=f"{crown}{name[:34]}",
                 anchor="e",
-                fill="#eeeeee" if name == winner else "#cccccc",
-                font=("Sans", 10, "bold" if name == winner else "normal"))
+                fill=CLR_TXT_BRIGHT if name == winner else CLR_TXT_NORMAL,
+                font=(FONT_TINY[0], FONT_TINY[1], "bold" if name == winner else "normal"))
             wins_lbl   = (self._judge_last_wins_label or {}).get(name)
             right_text = wins_lbl if wins_lbl else f"{score}%"
             canvas.create_text(
                 pad_left + bar_w + 6, y,
                 text=right_text, anchor="w",
-                fill="#aaaaaa", font=("Sans", 10))
+                fill=CLR_TXT_MUTED, font=FONT_TINY)
 
     def _on_judge_run(self) -> None:
         if self._judge_running:
@@ -166,7 +169,7 @@ class JudgeMixin:
 
         self._judge_running = True
         self._judge_btn.configure(state="disabled", text="Judging…")
-        self._judge_status.configure(text="", text_color="#888888")
+        self._judge_status.configure(text="", text_color=CLR_TXT_DIM)
         self._judge_log.configure(state="normal")
         self._judge_log.delete("1.0", "end")
         self._judge_log.configure(state="disabled")
@@ -201,7 +204,7 @@ class JudgeMixin:
                     if "error" in result:
                         _log(f"✗ {result['error']}\n\nRaw output:\n{result.get('raw', '')}")
                         self.after(0, lambda: self._judge_status.configure(
-                            text="✗ Parse error", text_color="#cc4444"))
+                            text="✗ Parse error", text_color=CLR_ERR))
                     else:
                         raw_scores = result.get("scores", {})
                         pct: dict[str, int] = {}
@@ -217,7 +220,7 @@ class JudgeMixin:
                         _log(f"Reasoning:\n{reasoning}")
                         self.after(0, lambda s=pct, w=winner: _show_leaderboard(s, w))
                         self.after(0, lambda w=winner: self._judge_status.configure(
-                            text=f"Winner: {w}", text_color="#c8a000"))
+                            text=f"Winner: {w}", text_color=CLR_WIN))
 
                 else:  # Pairwise
                     total = len(results) * (len(results) - 1) // 2
@@ -261,12 +264,12 @@ class JudgeMixin:
 
                     self.after(0, lambda s=scores, w=winner: _show_leaderboard(s, w))
                     self.after(0, lambda w=winner: self._judge_status.configure(
-                        text=f"Winner: {w}", text_color="#c8a000"))
+                        text=f"Winner: {w}", text_color=CLR_WIN))
 
             except Exception:
                 log.exception("Judge worker exception")
                 self.after(0, lambda: self._judge_status.configure(
-                    text="Internal error — see log", text_color="#cc4444"))
+                    text="Internal error — see log", text_color=CLR_ERR))
             finally:
                 self._judge_running = False
                 self.after(0, lambda: self._judge_btn.configure(

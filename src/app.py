@@ -19,15 +19,18 @@ from .mixins.run import RunMixin
 from .mixins.ui_rules import UIRulesMixin
 from .storage import (load_config, load_registry,
                       migrate_prompts_to_registry, save_config)
+from .theme import (
+    FONT_MONO as _FONT_MONO, FONT_SMALL as _FONT_SMALL, FONT_BOLD as _FONT_BOLD,
+    FONT_TINY,
+    CLR_RUN, CLR_RUN_HOV, CLR_PRIMARY, CLR_PRIMARY_HOV,
+    CLR_STOP, CLR_STOP_HOV, CLR_DANGER, CLR_DANGER_HOV,
+    CLR_OK, CLR_TXT_DIM, CLR_TXT_FAINT, CLR_TXT_GHOST,
+)
 
 log = logging.getLogger(__name__)
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
-
-_FONT_MONO  = ("Monospace", 12)
-_FONT_SMALL = ("Sans", 11)
-_FONT_BOLD  = ("Sans", 12, "bold")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -163,8 +166,8 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
                          font=_FONT_SMALL).grid(
                 row=i + 1, column=1, sticky="ew", padx=(0, 8), pady=2)
 
-        ctk.CTkLabel(param_box, text="(−1 = auto)", font=("Sans", 10),
-                     text_color="#777777").grid(
+        ctk.CTkLabel(param_box, text="(−1 = auto)", font=FONT_TINY,
+                     text_color=CLR_TXT_FAINT).grid(
             row=7, column=0, columnspan=2, padx=8, pady=(0, 6))
 
     def _build_local_tab(self) -> None:
@@ -234,7 +237,7 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
 
         self._hf_download_btn = ctk.CTkButton(
             tab, text="↓ Download", height=30,
-            fg_color="#1e6e1e", hover_color="#278a27",
+            fg_color=CLR_RUN, hover_color=CLR_RUN_HOV,
             command=self._on_hf_download,
         )
         self._hf_download_btn.grid(row=1, column=0, padx=4, pady=(6, 4), sticky="ew")
@@ -263,7 +266,7 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
         ctk.CTkButton(sp_hdr, text="Save", width=55, height=28,
                       command=self._save_prompt).grid(row=0, column=2, padx=2)
         ctk.CTkButton(sp_hdr, text="Del", width=40, height=28,
-                      fg_color="#7a2222", hover_color="#992222",
+                      fg_color=CLR_STOP, hover_color=CLR_STOP_HOV,
                       command=self._delete_prompt).grid(row=0, column=3)
 
         self._sys_text = ctk.CTkTextbox(top, height=85, wrap="word", font=_FONT_MONO,
@@ -280,7 +283,7 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
         self._single_btn = ctk.CTkButton(
             user_hdr, text="User Input", width=110, height=28,
             font=_FONT_BOLD,
-            fg_color="#1f6aa5", hover_color="#1a5a8a",
+            fg_color=CLR_PRIMARY, hover_color=CLR_PRIMARY_HOV,
             command=self._on_toggle_single)
         self._single_btn.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
@@ -290,12 +293,12 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
             command=self._on_batch_load).grid(row=0, column=1)
 
         self._batch_info_lbl = ctk.CTkLabel(
-            user_hdr, text="", font=("Sans", 10), text_color="#888888", anchor="w")
+            user_hdr, text="", font=FONT_TINY, text_color=CLR_TXT_DIM, anchor="w")
         self._batch_info_lbl.grid(row=0, column=2, sticky="w", padx=(8, 0))
 
         self._batch_clear_btn = ctk.CTkButton(
             user_hdr, text="✕", width=28, height=28,
-            fg_color="#5a1a1a", hover_color="#7a2222",
+            fg_color=CLR_DANGER, hover_color=CLR_DANGER_HOV,
             command=self._on_batch_clear)
 
         self._user_text = ctk.CTkTextbox(top, height=110, wrap="word", font=_FONT_MONO,
@@ -310,8 +313,8 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
             self._user_text.insert("end", reg[0].get("user", ""))
             self._prompt_combo.set(reg[0]["name"])
 
-        self._tok_label = ctk.CTkLabel(top, text="", font=("Sans", 10),
-                                       text_color="#666666", anchor="w")
+        self._tok_label = ctk.CTkLabel(top, text="", font=FONT_TINY,
+                                       text_color=CLR_TXT_GHOST, anchor="w")
         self._tok_label.grid(row=4, column=0, sticky="w", pady=(0, 4))
 
         # Controls row: Run | Stop | chat mode | extra args | status
@@ -320,13 +323,13 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
 
         self._run_btn = ctk.CTkButton(
             ctrl, text="▶  Run", width=110, height=36,
-            fg_color="#1e6e1e", hover_color="#278a27",
+            fg_color=CLR_RUN, hover_color=CLR_RUN_HOV,
             command=self._on_run)
         self._run_btn.grid(row=0, column=0, padx=(0, 6))
 
         self._stop_btn = ctk.CTkButton(
             ctrl, text="■  Stop", width=90, height=36,
-            fg_color="#7a2222", hover_color="#992222",
+            fg_color=CLR_STOP, hover_color=CLR_STOP_HOV,
             command=self._on_stop, state="disabled")
         self._stop_btn.grid(row=0, column=1, padx=(0, 12))
 
@@ -345,7 +348,7 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
                      height=32, font=_FONT_SMALL).grid(row=0, column=5, padx=(0, 14))
 
         self._status_lbl = ctk.CTkLabel(ctrl, text="", font=_FONT_SMALL,
-                                         text_color="#888888")
+                                         text_color=CLR_TXT_DIM)
         self._status_lbl.grid(row=0, column=6, padx=(0, 10))
 
         self._export_btn = ctk.CTkButton(
@@ -372,7 +375,7 @@ class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixi
         self.clipboard_clear()
         self.clipboard_append(name)
         orig_color = lbl.cget("text_color")
-        lbl.configure(text="✓ Copied!", text_color="#44aa44")
+        lbl.configure(text="✓ Copied!", text_color=CLR_OK)
         self.after(1200, lambda: lbl.configure(text=name, text_color=orig_color))
 
     def _save_settings(self) -> None:

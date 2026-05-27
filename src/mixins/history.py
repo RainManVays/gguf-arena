@@ -5,11 +5,12 @@ import logging
 import customtkinter as ctk
 
 from ..storage import delete_history_entry, load_history
+from ..theme import (
+    FONT_SMALL as _FONT_SMALL, FONT_BOLD as _FONT_BOLD,
+    CLR_DANGER, CLR_DANGER_HOV, CLR_TXT_GHOST, CLR_TXT_FAINT,
+)
 
 log = logging.getLogger(__name__)
-
-_FONT_SMALL = ("Sans", 11)
-_FONT_BOLD  = ("Sans", 12, "bold")
 
 
 class HistoryMixin:
@@ -20,7 +21,7 @@ class HistoryMixin:
         history = load_history()
         if not history:
             ctk.CTkLabel(self._history_scroll, text="No runs yet.",
-                         font=_FONT_SMALL, text_color="#666666").pack(
+                         font=_FONT_SMALL, text_color=CLR_TXT_GHOST).pack(
                 anchor="w", padx=8, pady=8)
         else:
             for entry in history:
@@ -50,7 +51,7 @@ class HistoryMixin:
         ctk.CTkLabel(
             card,
             text=f"SYS: {sys_prev}\nUSR: {user_prev}",
-            font=ctk.CTkFont(size=10), text_color="#777777",
+            font=ctk.CTkFont(size=10), text_color=CLR_TXT_FAINT,
             anchor="w", justify="left",
         ).grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
 
@@ -60,7 +61,7 @@ class HistoryMixin:
         ctk.CTkButton(btn_frame, text="Load", width=60, height=26,
                       command=lambda e=entry: self._load_history_entry(e)).pack(pady=(0, 4))
         ctk.CTkButton(btn_frame, text="✕", width=60, height=26,
-                      fg_color="#5a1a1a", hover_color="#7a2222",
+                      fg_color=CLR_DANGER, hover_color=CLR_DANGER_HOV,
                       command=lambda e=entry: self._on_delete_history(e)).pack()
 
     def _on_delete_history(self, entry: dict) -> None:

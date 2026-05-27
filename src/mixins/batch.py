@@ -10,12 +10,15 @@ import customtkinter as ctk
 
 from ..runner import run_model, truncate_user_input
 from ..storage import save_config
+from ..theme import (
+    FONT_MONO as _FONT_MONO, FONT_SMALL as _FONT_SMALL, FONT_BOLD as _FONT_BOLD,
+    FONT_MONO_SM, FONT_TINY,
+    CLR_JUDGE, CLR_JUDGE_HOV,
+    CLR_CANVAS_BG, CLR_WIN, CLR_ERR,
+    CLR_TXT_DIM, CLR_TXT_MUTED, CLR_TXT_NORMAL, CLR_ERR_TEXT,
+)
 
 log = logging.getLogger(__name__)
-
-_FONT_MONO  = ("Monospace", 12)
-_FONT_SMALL = ("Sans", 11)
-_FONT_BOLD  = ("Sans", 12, "bold")
 
 
 class BatchMixin:
@@ -153,7 +156,7 @@ class BatchMixin:
                 exp_preview = exp[:45].replace("\n", " ")
                 cell_text += f"\n✓ {exp_preview}{'…' if len(exp) > 45 else ''}"
             ctk.CTkLabel(scroll, text=cell_text,
-                         font=("Sans", 10), anchor="nw", width=160,
+                         font=FONT_TINY, anchor="nw", width=160,
                          justify="left").grid(row=row, column=0, padx=4, pady=2, sticky="nw")
 
             for j, mr in enumerate(cr["models"]):
@@ -161,11 +164,11 @@ class BatchMixin:
                     out = mr["output"][:110].replace("\n", " ")
                     tps_s = f"  [{mr['tps']:.1f} t/s]" if mr.get("tps") else ""
                     cell_text = out + tps_s
-                    color = "#cccccc"
+                    color = CLR_TXT_NORMAL
                 else:
                     cell_text = f"✗ {mr.get('output','')[:60]}"
-                    color = "#cc6666"
-                ctk.CTkLabel(scroll, text=cell_text, font=("Monospace", 10),
+                    color = CLR_ERR_TEXT
+                ctk.CTkLabel(scroll, text=cell_text, font=FONT_MONO_SM,
                              anchor="nw", width=220, justify="left",
                              wraplength=215, text_color=color).grid(
                     row=row, column=j+1, padx=4, pady=2, sticky="nw")
@@ -232,18 +235,18 @@ class BatchMixin:
 
         self._judge_btn = ctk.CTkButton(
             ctrl, text="⚖ Judge All Cases", width=150, height=32,
-            fg_color="#4a3a7a", hover_color="#5a4a9a",
+            fg_color=CLR_JUDGE, hover_color=CLR_JUDGE_HOV,
             command=self._on_batch_judge_run,
         )
         self._judge_btn.pack(side="left")
 
         self._judge_status = ctk.CTkLabel(
-            ctrl, text="", font=_FONT_SMALL, text_color="#888888")
+            ctrl, text="", font=_FONT_SMALL, text_color=CLR_TXT_DIM)
         self._judge_status.pack(side="left", padx=(10, 0))
 
         bar_height = len(ok_models) * 36 + 20
         self._judge_canvas = tk.Canvas(
-            tab, bg="#2b2b2b", highlightthickness=0, height=bar_height)
+            tab, bg=CLR_CANVAS_BG, highlightthickness=0, height=bar_height)
         self._judge_canvas.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 0))
         self._judge_canvas.bind("<Configure>", lambda _: self._redraw_judge_leaderboard())
 
@@ -283,7 +286,7 @@ class BatchMixin:
 
         self._judge_running = True
         self._judge_btn.configure(state="disabled", text="Judging…")
-        self._judge_status.configure(text="", text_color="#888888")
+        self._judge_status.configure(text="", text_color=CLR_TXT_DIM)
         self._judge_log.configure(state="normal")
         self._judge_log.delete("1.0", "end")
         self._judge_log.configure(state="disabled")
@@ -364,7 +367,7 @@ class BatchMixin:
                     self.after(0, _update_lb)
                     self.after(0, lambda w=winner: self._judge_status.configure(
                         text=f"Winner: {w} ({total_wins[w]}/{total_cases} cases)",
-                        text_color="#c8a000"))
+                        text_color=CLR_WIN))
 
                     _log("\n── Leaderboard ──")
                     for n, w in sorted(total_wins.items(), key=lambda x: -x[1]):
@@ -373,7 +376,7 @@ class BatchMixin:
             except Exception:
                 log.exception("Batch judge worker exception")
                 self.after(0, lambda: self._judge_status.configure(
-                    text="Internal error — see log", text_color="#cc4444"))
+                    text="Internal error — see log", text_color=CLR_ERR))
             finally:
                 self._judge_running = False
                 self.after(0, lambda: self._judge_btn.configure(

@@ -8,10 +8,9 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from ..storage import save_config
+from ..theme import FONT_SMALL as _FONT_SMALL, CLR_TXT_FAINT
 
 log = logging.getLogger(__name__)
-
-_FONT_SMALL = ("Sans", 11)
 
 
 def _fmt_size(n: int) -> str:
@@ -84,7 +83,7 @@ class ModelsPanelMixin:
 
         if not folder.is_dir():
             ctk.CTkLabel(self._models_scroll, text="No folder selected",
-                         font=_FONT_SMALL, text_color="#777777").pack(anchor="w", pady=4)
+                         font=_FONT_SMALL, text_color=CLR_TXT_FAINT).pack(anchor="w", pady=4)
             self._rebind_scroll_wheel(self._models_scroll)
             return
 
@@ -93,7 +92,7 @@ class ModelsPanelMixin:
 
         if not files:
             ctk.CTkLabel(self._models_scroll, text="No .gguf files found",
-                         font=_FONT_SMALL, text_color="#777777").pack(anchor="w", pady=4)
+                         font=_FONT_SMALL, text_color=CLR_TXT_FAINT).pack(anchor="w", pady=4)
             self._rebind_scroll_wheel(self._models_scroll)
             return
 
