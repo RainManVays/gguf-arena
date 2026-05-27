@@ -4,17 +4,20 @@ import logging
 import subprocess
 import threading
 import tkinter as tk
-from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from .runner import _estimate_tokens, run_model, truncate_user_input
+from .mixins.compare import CompareMixin
+from .mixins.export import ExportMixin
+from .mixins.history import HistoryMixin
+from .mixins.models_panel import ModelsPanelMixin
+from .mixins.prompts import PromptsMixin
+from .runner import run_model, truncate_user_input
 from .mdrender import render as _md_render
-from .storage import (append_history, delete_from_registry, delete_history_entry,
-                      load_config, load_history, load_registry, make_history_entry,
-                      migrate_prompts_to_registry, save_config, save_to_registry)
+from .storage import (append_history, load_config, load_registry,
+                      make_history_entry, migrate_prompts_to_registry, save_config)
 
 log = logging.getLogger(__name__)
 
@@ -26,17 +29,9 @@ _FONT_SMALL = ("Sans", 11)
 _FONT_BOLD  = ("Sans", 12, "bold")
 
 
-def _fmt_size(n: int) -> str:
-    for unit in ("B", "KB", "MB", "GB"):
-        if n < 1024:
-            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n /= 1024
-    return f"{n:.1f} TB"
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 
-class App(ctk.CTk):
+class App(HistoryMixin, CompareMixin, ExportMixin, PromptsMixin, ModelsPanelMixin, ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("GGUF Arena")
@@ -65,6 +60,12 @@ class App(ctk.CTk):
         self._judge_last_winner: str | None = None
         self._judge_last_wins_label: dict | None = None  # name → "W/N wins" for pairwise
 
+        # batch state
+        self._batch_cases: list[dict] | None = None
+        self._batch_mode = False
+        self._batch_run_results: list[dict] = []
+        self._batch_source_path: str = ""
+
         log.info("App started")
         self._build_ui()
         self._load_model_list()
@@ -76,22 +77,6 @@ class App(ctk.CTk):
     def _ui(self, func, **kwargs) -> None:
         """Schedule a widget configure call safely from any thread."""
         self.after(0, lambda: func(**kwargs))
-
-    def _update_token_counter(self, event=None) -> None:
-        sys_tok  = _estimate_tokens(self._sys_text.get("1.0", "end"))
-        user_tok = _estimate_tokens(self._user_text.get("1.0", "end"))
-        total    = sys_tok + user_tok
-        try:
-            ctx = int(self._ctx_var.get())
-        except ValueError:
-            ctx = 0
-        ratio = total / ctx if ctx > 0 else 0
-        color = "#44aa44" if ratio < 0.8 else ("#ddaa00" if ratio <= 1.0 else "#cc4444")
-        ctx_str = f" / {ctx}" if ctx > 0 else ""
-        self._tok_label.configure(
-            text=f"SYS: ~{sys_tok}  USR: ~{user_tok}  Total: ~{total}{ctx_str} tok",
-            text_color=color,
-        )
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
@@ -286,8 +271,31 @@ class App(ctk.CTk):
         self._sys_text.bind("<KeyRelease>", self._update_token_counter)
         self._ctx_var.trace_add("write", lambda *_: self._update_token_counter())
 
-        ctk.CTkLabel(top, text="User Input", font=_FONT_BOLD).grid(
-            row=2, column=0, sticky="w")
+        user_hdr = ctk.CTkFrame(top, fg_color="transparent")
+        user_hdr.grid(row=2, column=0, sticky="ew")
+        user_hdr.grid_columnconfigure(2, weight=1)
+
+        self._single_btn = ctk.CTkButton(
+            user_hdr, text="User Input", width=110, height=28,
+            font=_FONT_BOLD,
+            fg_color="#1f6aa5", hover_color="#1a5a8a",
+            command=self._on_toggle_single)
+        self._single_btn.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        ctk.CTkButton(
+            user_hdr, text="Load Batch…", width=100, height=28,
+            font=_FONT_SMALL,
+            command=self._on_batch_load).grid(row=0, column=1)
+
+        self._batch_info_lbl = ctk.CTkLabel(
+            user_hdr, text="", font=("Sans", 10), text_color="#888888", anchor="w")
+        self._batch_info_lbl.grid(row=0, column=2, sticky="w", padx=(8, 0))
+
+        self._batch_clear_btn = ctk.CTkButton(
+            user_hdr, text="✕", width=28, height=28,
+            fg_color="#5a1a1a", hover_color="#7a2222",
+            command=self._on_batch_clear)
+
         self._user_text = ctk.CTkTextbox(top, height=110, wrap="word", font=_FONT_MONO,
                                          undo=True)
         self._user_text.grid(row=3, column=0, sticky="ew", pady=(2, 2))
@@ -324,20 +332,24 @@ class App(ctk.CTk):
         ctk.CTkCheckBox(ctrl, text="Chat mode", variable=self._chat_mode_var,
                         font=_FONT_SMALL).grid(row=0, column=2, padx=(0, 14))
 
+        self._auto_judge_var = ctk.BooleanVar(value=self.cfg.get("auto_judge", False))
+        ctk.CTkCheckBox(ctrl, text="Run judge", variable=self._auto_judge_var,
+                        font=_FONT_SMALL).grid(row=0, column=3, padx=(0, 14))
+
         ctk.CTkLabel(ctrl, text="Extra args:", font=_FONT_SMALL).grid(
-            row=0, column=3, padx=(0, 4))
+            row=0, column=4, padx=(0, 4))
         self._extra_var = ctk.StringVar(value=self.cfg.get("extra_args", ""))
         ctk.CTkEntry(ctrl, textvariable=self._extra_var, width=220,
-                     height=32, font=_FONT_SMALL).grid(row=0, column=4, padx=(0, 14))
+                     height=32, font=_FONT_SMALL).grid(row=0, column=5, padx=(0, 14))
 
         self._status_lbl = ctk.CTkLabel(ctrl, text="", font=_FONT_SMALL,
                                          text_color="#888888")
-        self._status_lbl.grid(row=0, column=5, padx=(0, 10))
+        self._status_lbl.grid(row=0, column=6, padx=(0, 10))
 
         self._export_btn = ctk.CTkButton(
             ctrl, text="Export…", width=80, height=32,
             state="disabled", command=self._on_export)
-        self._export_btn.grid(row=0, column=6)
+        self._export_btn.grid(row=0, column=7)
 
         # Results tabs
         self._tabs = ctk.CTkTabview(self._right)
@@ -348,192 +360,48 @@ class App(ctk.CTk):
         self._history_scroll.pack(fill="both", expand=True)
 
 
-    # ── HF Download ───────────────────────────────────────────────────────────
+    # ── Batch mode ────────────────────────────────────────────────────────────
 
-    def _browse_nlp_dir(self) -> None:
-        path = filedialog.askdirectory(title="Select NLP models folder")
-        if path:
-            self._nlp_dir_var.set(path)
-            self.cfg["nlp_models_dir"] = path
-            save_config(self.cfg)
-
-    def _on_hf_download(self) -> None:
-        repo_id   = self._hf_repo_var.get().strip()
-        local_dir = self._nlp_dir_var.get().strip()
-        if not repo_id:
-            messagebox.showwarning("No model ID", "Enter a HuggingFace model ID.", parent=self)
-            return
-        if not local_dir:
-            messagebox.showwarning("No directory", "Select a save directory.", parent=self)
-            return
-
-        self.cfg["nlp_models_dir"] = local_dir
-        save_config(self.cfg)
-
-        self._hf_log.configure(state="normal")
-        self._hf_log.delete("1.0", "end")
-        self._hf_log.configure(state="disabled")
-        self._hf_download_btn.configure(state="disabled", text="Downloading…")
-
-        def _append(msg: str) -> None:
-            def _do() -> None:
-                self._hf_log.configure(state="normal")
-                self._hf_log.insert("end", msg + "\n")
-                self._hf_log.see("end")
-                self._hf_log.configure(state="disabled")
-            self.after(0, _do)
-
-        def worker() -> None:
-            try:
-                from .hf_downloader import download_model
-                download_model(repo_id, local_dir, on_progress=_append)
-            except Exception as e:
-                _append(f"✗ Error: {e}")
-                log.exception("HF download failed: %s → %s", repo_id, local_dir)
-            finally:
-                self.after(0, lambda: self._hf_download_btn.configure(
-                    state="normal", text="↓ Download"))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    # ── Model list ────────────────────────────────────────────────────────────
-
-    def _load_model_list(self) -> None:
-        for w in self._models_scroll.winfo_children():
-            w.destroy()
-        self.model_vars.clear()
-
-        folder = Path(self._models_dir_var.get())
-        log.debug("Scanning models in %s (recursive=%s)", folder, self._recursive_var.get())
-
-        if not folder.is_dir():
-            ctk.CTkLabel(self._models_scroll, text="No folder selected",
-                         font=_FONT_SMALL, text_color="#777777").pack(anchor="w", pady=4)
-            return
-
-        pattern = "**/*.gguf" if self._recursive_var.get() else "*.gguf"
-        files = sorted(folder.glob(pattern))
-
-        if not files:
-            ctk.CTkLabel(self._models_scroll, text="No .gguf files found",
-                         font=_FONT_SMALL, text_color="#777777").pack(anchor="w", pady=4)
-            return
-
-        log.info("Found %d model(s) in %s", len(files), folder)
-        for f in files:
-            base = str(f.relative_to(folder)) if self._recursive_var.get() else f.name
-            try:
-                size_str = _fmt_size(f.stat().st_size)
-            except OSError:
-                size_str = "?"
-            display = f"{base}  [{size_str}]"
-            var = ctk.BooleanVar(value=False)
-            ctk.CTkCheckBox(self._models_scroll, text=display, variable=var,
-                            font=_FONT_SMALL).pack(anchor="w", pady=2)
-            self.model_vars[str(f)] = var
-
-    def _add_model_file(self) -> None:
+    def _on_batch_load(self) -> None:
         path = filedialog.askopenfilename(
-            title="Select .gguf model",
-            filetypes=[("GGUF models", "*.gguf"), ("All files", "*.*")],
+            title="Load batch cases",
+            filetypes=[("YAML / JSON", "*.yaml *.yml *.json"), ("All files", "*.*")],
         )
-        if not path or path in self.model_vars:
+        if not path:
             return
-        var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self._models_scroll, text=Path(path).name,
-                        variable=var, font=_FONT_SMALL).pack(anchor="w", pady=2)
-        self.model_vars[path] = var
-
-    def _select_all(self)  -> None:
-        for v in self.model_vars.values(): v.set(True)
-
-    def _select_none(self) -> None:
-        for v in self.model_vars.values(): v.set(False)
-
-    def _browse_llama(self) -> None:
-        path = filedialog.askopenfilename(title="Select llama-cli binary")
-        if path:
-            self._llama_var.set(path)
-            log.info("llama-cli set to %s", path)
-            self._save_settings()
-
-    def _browse_models_dir(self) -> None:
-        path = filedialog.askdirectory(title="Select models folder")
-        if path:
-            self._models_dir_var.set(path)
-            log.info("Models dir set to %s", path)
-            self._save_settings()
-            self._load_model_list()
-
-    # ── Prompt library ────────────────────────────────────────────────────────
-
-    def _prompt_names(self) -> list[str]:
-        return [e["name"] for e in load_registry()] or ["—"]
-
-    def _on_load_prompt(self, name: str) -> None:
-        for e in load_registry():
-            if e["name"] == name:
-                self._sys_text.delete("1.0", "end")
-                self._sys_text.insert("end", e.get("system", ""))
-                self._user_text.delete("1.0", "end")
-                self._user_text.insert("end", e.get("user", ""))
-                break
-
-    def _bind_text_keys(self, widget: ctk.CTkTextbox) -> None:
-        widget.bind("<Control-z>", self._undo_text)
-        widget.bind("<Control-y>", self._redo_text)
-        widget.bind("<Control-Z>", self._redo_text)  # Ctrl+Shift+Z
-
-    def _on_ctrl_a(self, event) -> str:
-        w = event.widget
-        if isinstance(w, tk.Entry):
-            w.select_range(0, "end")
-            w.icursor("end")
-        elif isinstance(w, tk.Text):
-            w.tag_add("sel", "1.0", "end")
-        return "break"
-
-    def _undo_text(self, event) -> str:
         try:
-            event.widget.edit_undo()
-        except Exception:
-            pass
-        return "break"
-
-    def _redo_text(self, event) -> str:
-        try:
-            event.widget.edit_redo()
-        except Exception:
-            pass
-        return "break"
-
-    def _save_prompt(self) -> None:
-        current = self._prompt_combo.get()
-        default = current if current and current != "—" else ""
-        name = simpledialog.askstring(
-            "Save Prompt", "Prompt name:", initialvalue=default, parent=self)
-        if not name:
+            from .batch_runner import load_batch_file
+            cases = load_batch_file(path)
+        except ValueError as exc:
+            messagebox.showerror("Batch load error", str(exc), parent=self)
             return
-        system = self._sys_text.get("1.0", "end").strip()
-        user   = self._user_text.get("1.0", "end").strip()
-        from .storage import REGISTRY_DIR, _slug
-        if (REGISTRY_DIR / f"{_slug(name)}.yaml").exists():
-            if not messagebox.askyesno("Overwrite?", f'Overwrite prompt "{name}"?',
-                                       parent=self):
-                return
-        save_to_registry(name, system, user)
-        names = self._prompt_names()
-        self._prompt_combo.configure(values=names)
-        self._prompt_combo.set(name)
+        self._batch_cases = cases
+        self._batch_source_path = path
+        fname = Path(path).name
+        n = len(cases)
+        self._batch_info_lbl.configure(
+            text=f"{fname} · {n} case{'s' if n != 1 else ''}", text_color="#aaaaaa")
+        self._batch_clear_btn.grid(row=0, column=3, padx=(4, 0))
+        self._set_batch_mode(True)
 
-    def _delete_prompt(self) -> None:
-        name = self._prompt_combo.get()
-        if not name or name == "—":
-            return
-        delete_from_registry(name)
-        names = self._prompt_names()
-        self._prompt_combo.configure(values=names)
-        self._prompt_combo.set(names[0])
+    def _on_batch_clear(self) -> None:
+        self._batch_cases = None
+        self._batch_info_lbl.configure(text="")
+        self._batch_clear_btn.grid_remove()
+        self._set_batch_mode(False)
+
+    def _set_batch_mode(self, active: bool) -> None:
+        self._batch_mode = active
+        if active:
+            self._user_text.configure(state="disabled", fg_color=("#303030", "#252525"))
+            self._single_btn.configure(fg_color="#444444", hover_color="#555555")
+        else:
+            self._user_text.configure(state="normal", fg_color=("gray86", "gray17"))
+            self._single_btn.configure(fg_color="#1f6aa5", hover_color="#1a5a8a")
+
+    def _on_toggle_single(self) -> None:
+        if self._batch_mode:
+            self._set_batch_mode(False)
 
     def _toggle_md(self, name: str) -> None:
         tb, stat, md_btn = self._model_widgets[name]
@@ -622,8 +490,36 @@ class App(ctk.CTk):
         chat_mode     = self._chat_mode_var.get()
         extra_args    = self._extra_var.get().strip()
 
+        # Remove previous model tabs (keep History)
+        for tab_name in list(self._tabs._tab_dict.keys()):
+            if tab_name != "History":
+                self._tabs.delete(tab_name)
+        self._model_widgets.clear()
+        self._raw_outputs.clear()
+        self._md_mode.clear()
+
+        self._running        = True
+        self._stop_requested = False
+        self._current_proc   = None
+        self._set_running(True)
+        self._save_settings()
+
+        # ── Batch path ────────────────────────────────────────────────────────
+        if self._batch_mode and self._batch_cases:
+            log.info("Batch run: %d case(s) × %d model(s)  chat_mode=%s",
+                     len(self._batch_cases), len(selected), chat_mode)
+            threading.Thread(
+                target=self._run_batch_worker,
+                args=(llama_path, selected, system_prompt, params, chat_mode, extra_args),
+                daemon=True,
+            ).start()
+            return
+
+        # ── Single path ───────────────────────────────────────────────────────
         if not user_input and not system_prompt:
             messagebox.showwarning("Empty", "Enter system prompt or user input.")
+            self._running = False
+            self._set_running(False)
             return
 
         try:
@@ -633,6 +529,8 @@ class App(ctk.CTk):
             )
         except ValueError as exc:
             messagebox.showerror("Prompt too long", str(exc))
+            self._running = False
+            self._set_running(False)
             return
 
         if was_truncated:
@@ -643,14 +541,6 @@ class App(ctk.CTk):
             )
             self._user_text.delete("1.0", "end")
             self._user_text.insert("end", user_input)
-
-        # Remove previous model tabs (keep History)
-        for tab_name in list(self._tabs._tab_dict.keys()):
-            if tab_name != "History":
-                self._tabs.delete(tab_name)
-        self._model_widgets.clear()
-        self._raw_outputs.clear()
-        self._md_mode.clear()
 
         # Create result tabs
         for path, _ in selected:
@@ -680,12 +570,6 @@ class App(ctk.CTk):
             md_btn.grid(row=0, column=2, padx=(0, 8))
 
             self._model_widgets[name] = (tb, stat, md_btn)
-
-        self._running        = True
-        self._stop_requested = False
-        self._current_proc   = None
-        self._set_running(True)
-        self._save_settings()
 
         if selected:
             self._tabs.set(Path(selected[0][0]).name)
@@ -802,143 +686,371 @@ class App(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    # ── History tab ───────────────────────────────────────────────────────────
+    # ── Batch worker & results ────────────────────────────────────────────────
 
-    def _refresh_history_tab(self) -> None:
-        for w in self._history_scroll.winfo_children():
-            w.destroy()
-        history = load_history()
-        if not history:
-            ctk.CTkLabel(self._history_scroll, text="No runs yet.",
-                         font=_FONT_SMALL, text_color="#666666").pack(
-                anchor="w", padx=8, pady=8)
-            return
-        for entry in history:
-            self._add_history_card(entry)
+    def _run_batch_worker(self, llama_path: str, selected: list,
+                          system_prompt: str, params: dict,
+                          chat_mode: bool, extra_args: str) -> None:
+        self._batch_run_results = []
+        cases = self._batch_cases or []
+        total_cases  = len(cases)
+        total_models = len(selected)
 
-    def _add_history_card(self, entry: dict) -> None:
-        card = ctk.CTkFrame(self._history_scroll)
-        card.pack(fill="x", padx=4, pady=3)
-        card.grid_columnconfigure(0, weight=1)
+        try:
+            for ci, case in enumerate(cases):
+                if self._stop_requested:
+                    break
 
-        ts = entry.get("timestamp", "")[:19].replace("T", " ")
-        models = entry.get("models", [])
-        model_summary = "  |  ".join(
-            "{} {}".format(
-                m["name"],
-                "%.1f tok/s" % m["tps"] if m.get("tps") else ("✓" if m.get("success") else "✗"),
-            )
-            for m in models
-        )
-        ctk.CTkLabel(card, text=f"{ts}   {model_summary}",
-                     font=ctk.CTkFont(size=11, weight="bold"), anchor="w").grid(
-            row=0, column=0, sticky="ew", padx=8, pady=(6, 2))
+                try:
+                    ui, _ = truncate_user_input(
+                        system_prompt, case["input"],
+                        params["ctx_size"], params["max_tokens"])
+                except ValueError:
+                    ui = case["input"]
 
-        sys_prev  = entry.get("system_prompt", "").replace("\n", " ")[:70]
-        user_prev = entry.get("user_input",    "").replace("\n", " ")[:70]
-        ctk.CTkLabel(
-            card,
-            text=f"SYS: {sys_prev}\nUSR: {user_prev}",
-            font=ctk.CTkFont(size=10), text_color="#777777",
-            anchor="w", justify="left",
-        ).grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
+                case_result: dict = {
+                    "case_id":  case["id"],
+                    "user_input": case["input"],
+                    "expected": case.get("expected"),
+                    "models":   [],
+                }
 
-        btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-        btn_frame.grid(row=0, column=1, rowspan=2, padx=8)
+                for mi, (path, _) in enumerate(selected):
+                    if self._stop_requested:
+                        break
+                    name = Path(path).name
+                    txt = f"Case {ci+1}/{total_cases} · {name} [{mi+1}/{total_models}]"
+                    self.after(0, lambda t=txt: self._status_lbl.configure(text=t))
 
-        ctk.CTkButton(btn_frame, text="Load", width=60, height=26,
-                      command=lambda e=entry: self._load_history_entry(e)).pack(pady=(0, 4))
-        ctk.CTkButton(btn_frame, text="✕", width=60, height=26,
-                      fg_color="#5a1a1a", hover_color="#7a2222",
-                      command=lambda e=entry: self._on_delete_history(e)).pack()
+                    def _on_proc(proc, n=name) -> None:
+                        self._current_proc = proc
+                        log.debug("Process started  model=%s  pid=%d", n, proc.pid)
 
-    def _on_delete_history(self, entry: dict) -> None:
-        ts = entry.get("timestamp", "")
-        delete_history_entry(ts)
-        log.info("History entry deleted: %s", ts)
-        self._refresh_history_tab()
+                    res = run_model(
+                        llama_path=llama_path,
+                        model_path=path,
+                        system_prompt=system_prompt,
+                        user_input=ui,
+                        params=params,
+                        chat_mode=chat_mode,
+                        extra_args=extra_args,
+                        proc_started=_on_proc,
+                    )
+                    case_result["models"].append({
+                        "name":     name,
+                        "success":  res.get("success", False),
+                        "output":   res.get("output", ""),
+                        "elapsed":  res.get("elapsed", 0),
+                        "tps":      res.get("tps"),
+                        "n_tokens": res.get("n_tokens"),
+                    })
 
-    def _load_history_entry(self, entry: dict) -> None:
-        self._sys_text.delete("1.0", "end")
-        self._sys_text.insert("end", entry.get("system_prompt", ""))
-        self._user_text.delete("1.0", "end")
-        self._user_text.insert("end", entry.get("user_input", ""))
+                self._batch_run_results.append(case_result)
 
-    # ── Compare tab ───────────────────────────────────────────────────────────
+            if self._batch_run_results:
+                # aggregate tok/s per model for Stats tab
+                agg: dict[str, list] = {}
+                for cr in self._batch_run_results:
+                    for mr in cr["models"]:
+                        n = mr["name"]
+                        agg.setdefault(n, [])
+                        if mr.get("tps"):
+                            agg[n].append(mr["tps"])
+                agg_results = [
+                    {"name": n, "tps": sum(vals) / len(vals) if vals else None}
+                    for n, vals in agg.items()
+                ]
+                self.after(0, lambda r=agg_results: self._build_stats_tab(r))
+                self.after(0, self._build_batch_results_tab)
+                self.after(0, self._build_batch_judge_tab)
+                self.after(0, lambda: self._export_btn.configure(state="normal"))
 
-    def _build_compare_tab(self, results: list[dict]) -> None:
-        successful = [r for r in results if r.get("success") and r.get("output")]
-        if len(successful) < 2:
-            return
+            done_n  = len(self._batch_run_results)
+            stopped = self._stop_requested
+            txt = (f"Stopped ({done_n}/{total_cases} cases)" if stopped
+                   else f"Done (batch: {done_n} × {total_models})")
+            self.after(0, lambda t=txt: self._status_lbl.configure(text=t))
 
+        except Exception:
+            log.exception("Batch worker exception")
+            self.after(0, lambda: self._status_lbl.configure(text="Internal error — see log"))
+        finally:
+            self._running        = False
+            self._stop_requested = False
+            self._current_proc   = None
+            self.after(0, lambda: self._set_running(False))
+
+    def _build_batch_results_tab(self) -> None:
         for name in list(self._tabs._tab_dict.keys()):
-            if name == "Compare":
+            if name == "Batch":
                 self._tabs.delete(name)
+        if not self._batch_run_results:
+            return
 
-        self._tabs.add("Compare")
-        tab = self._tabs.tab("Compare")
-        n = len(successful)
+        self._tabs.add("Batch")
+        tab = self._tabs.tab("Batch")
         tab.grid_rowconfigure(1, weight=1)
-        for i in range(n):
-            tab.grid_columnconfigure(i, weight=1)
-
-        for i, r in enumerate(successful):
-            ctk.CTkLabel(tab, text=r["name"], font=_FONT_BOLD, anchor="center").grid(
-                row=0, column=i, sticky="ew", padx=(4 if i else 8, 4), pady=(4, 2))
-            tb = ctk.CTkTextbox(tab, wrap="word", state="disabled", font=_FONT_MONO)
-            tb.grid(row=1, column=i, sticky="nsew", padx=(4 if i else 8, 4), pady=(0, 4))
-            tb.configure(state="normal")
-            tb.insert("end", r["output"])
-            tb.configure(state="disabled")
-
-    # ── Stats tab (tok/s chart) ───────────────────────────────────────────────
-
-    def _build_stats_tab(self, results: list[dict]) -> None:
-        has_tps = [r for r in results if r.get("tps") is not None]
-        if len(has_tps) < 2:
-            return
-
-        for name in list(self._tabs._tab_dict.keys()):
-            if name == "Stats":
-                self._tabs.delete(name)
-
-        self._tabs.add("Stats")
-        tab = self._tabs.tab("Stats")
-        tab.grid_rowconfigure(0, weight=1)
         tab.grid_columnconfigure(0, weight=1)
 
-        canvas = tk.Canvas(tab, bg="#2b2b2b", highlightthickness=0)
-        canvas.grid(row=0, column=0, sticky="nsew")
+        toolbar = ctk.CTkFrame(tab, fg_color="transparent")
+        toolbar.grid(row=0, column=0, sticky="ew", padx=8, pady=(4, 2))
+        ctk.CTkButton(toolbar, text="💾 Save YAML", width=120, height=28,
+                      font=_FONT_SMALL,
+                      command=self._on_save_batch_yaml).pack(side="left")
 
-        def _draw(event=None):
-            canvas.delete("all")
-            w = canvas.winfo_width()
-            h = canvas.winfo_height()
-            if w < 10 or h < 10:
-                return
-            pad_left  = 240
-            pad_right = 100
-            pad_top   = 20
-            row_h     = max(28, (h - pad_top) // len(has_tps))
-            max_tps   = max(r["tps"] for r in has_tps)
-            bar_area  = max(1, w - pad_left - pad_right)
-            for i, r in enumerate(has_tps):
-                y = pad_top + i * row_h + row_h // 2
-                bar_w = int(r["tps"] / max_tps * bar_area)
-                canvas.create_rectangle(
-                    pad_left, y - 10, pad_left + bar_w, y + 10,
-                    fill="#1f6aa5", outline="")
-                label = r["name"][:36]
-                canvas.create_text(
-                    pad_left - 8, y, text=label, anchor="e",
-                    fill="#cccccc", font=("Sans", 10))
-                canvas.create_text(
-                    pad_left + bar_w + 6, y,
-                    text=f"{r['tps']:.1f} tok/s", anchor="w",
-                    fill="#aaaaaa", font=("Sans", 10))
+        scroll = ctk.CTkScrollableFrame(tab)
+        scroll.grid(row=1, column=0, sticky="nsew")
 
-        canvas.bind("<Configure>", _draw)
-        canvas.after(50, _draw)
+        model_names = [m["name"] for m in self._batch_run_results[0]["models"]]
+
+        # Header
+        ctk.CTkLabel(scroll, text="Case / Input", font=_FONT_BOLD,
+                     anchor="w", width=160).grid(row=0, column=0, padx=4, pady=2, sticky="ew")
+        for j, mname in enumerate(model_names):
+            ctk.CTkLabel(scroll, text=mname[:28], font=_FONT_BOLD,
+                         anchor="w", width=220).grid(row=0, column=j+1, padx=4, pady=2, sticky="ew")
+
+        for i, cr in enumerate(self._batch_run_results):
+            row = i + 1
+            inp = cr["user_input"]
+            preview = inp[:55].replace("\n", " ")
+            if len(inp) > 55:
+                preview += "…"
+            cell_text = f"{cr['case_id']}\n{preview}"
+            exp = cr.get("expected")
+            if exp:
+                exp_preview = exp[:45].replace("\n", " ")
+                cell_text += f"\n✓ {exp_preview}{'…' if len(exp) > 45 else ''}"
+            ctk.CTkLabel(scroll, text=cell_text,
+                         font=("Sans", 10), anchor="nw", width=160,
+                         justify="left").grid(row=row, column=0, padx=4, pady=2, sticky="nw")
+
+            for j, mr in enumerate(cr["models"]):
+                if mr.get("success") and mr.get("output"):
+                    out = mr["output"][:110].replace("\n", " ")
+                    tps_s = f"  [{mr['tps']:.1f} t/s]" if mr.get("tps") else ""
+                    cell_text = out + tps_s
+                    color = "#cccccc"
+                else:
+                    cell_text = f"✗ {mr.get('output','')[:60]}"
+                    color = "#cc6666"
+                ctk.CTkLabel(scroll, text=cell_text, font=("Monospace", 10),
+                             anchor="nw", width=220, justify="left",
+                             wraplength=215, text_color=color).grid(
+                    row=row, column=j+1, padx=4, pady=2, sticky="nw")
+
+        self._tabs.set("Batch")
+
+    def _build_batch_judge_tab(self) -> None:
+        for name in list(self._tabs._tab_dict.keys()):
+            if name == "Judge":
+                self._tabs.delete(name)
+        if not self._batch_run_results:
+            return
+
+        first = self._batch_run_results[0]
+        ok_models = [m for m in first["models"] if m.get("success") and m.get("output")]
+        if len(ok_models) < 2:
+            return
+
+        self._tabs.add("Judge")
+        tab = self._tabs.tab("Judge")
+        tab.grid_rowconfigure(2, weight=1)
+        tab.grid_columnconfigure(0, weight=1)
+
+        self._judge_system_prompt    = self._sys_text.get("1.0", "end").strip()
+        self._judge_last_scores      = None
+        self._judge_last_winner      = None
+        self._judge_last_wins_label  = None
+
+        # Controls
+        ctrl = ctk.CTkFrame(tab, fg_color="transparent")
+        ctrl.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+
+        ctk.CTkLabel(ctrl, text="Judge:", font=_FONT_SMALL).pack(side="left", padx=(0, 4))
+
+        folder = Path(self._models_dir_var.get())
+        self._judge_model_paths = {}
+        display_names: list[str] = []
+        for p in self.model_vars:
+            f = Path(p)
+            try:
+                disp = str(f.relative_to(folder)) if self._recursive_var.get() else f.name
+            except ValueError:
+                disp = f.name
+            if disp not in self._judge_model_paths:
+                self._judge_model_paths[disp] = p
+                display_names.append(disp)
+
+        self._judge_model_combo = ctk.CTkComboBox(
+            ctrl, values=display_names, width=260, font=_FONT_SMALL)
+        saved = self.cfg.get("judge_model", "")
+        saved_path = self._judge_model_paths.get(saved, "")
+        if saved and saved in display_names and Path(saved_path).is_file():
+            self._judge_model_combo.set(saved)
+        elif display_names:
+            self._judge_model_combo.set(display_names[0])
+        self._judge_model_combo.pack(side="left", padx=(0, 10))
+
+        saved_mode = self.cfg.get("judge_mode", "Pairwise")
+        self._judge_mode_var = ctk.StringVar(value=saved_mode)
+        ctk.CTkSegmentedButton(
+            ctrl, values=["All at once", "Pairwise"],
+            variable=self._judge_mode_var, font=_FONT_SMALL,
+        ).pack(side="left", padx=(0, 10))
+
+        self._judge_btn = ctk.CTkButton(
+            ctrl, text="⚖ Judge All Cases", width=150, height=32,
+            fg_color="#4a3a7a", hover_color="#5a4a9a",
+            command=self._on_batch_judge_run,
+        )
+        self._judge_btn.pack(side="left")
+
+        self._judge_status = ctk.CTkLabel(
+            ctrl, text="", font=_FONT_SMALL, text_color="#888888")
+        self._judge_status.pack(side="left", padx=(10, 0))
+
+        # Leaderboard canvas (sized by number of models)
+        bar_height = len(ok_models) * 36 + 20
+        self._judge_canvas = tk.Canvas(
+            tab, bg="#2b2b2b", highlightthickness=0, height=bar_height)
+        self._judge_canvas.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 0))
+        self._judge_canvas.bind("<Configure>", lambda _: self._redraw_judge_leaderboard())
+
+        # Log / per-case results
+        self._judge_log = ctk.CTkTextbox(
+            tab, wrap="word", state="disabled", font=_FONT_MONO)
+        self._judge_log.grid(row=2, column=0, sticky="nsew", padx=8, pady=(4, 8))
+
+    def _on_batch_judge_run(self) -> None:
+        if self._judge_running:
+            return
+
+        judge_name = self._judge_model_combo.get()
+        judge_path = self._judge_model_paths.get(judge_name, "")
+        if not judge_path or not Path(judge_path).is_file():
+            self.cfg.pop("judge_model", None)
+            save_config(self.cfg)
+            messagebox.showerror("Judge", f"Model file not found:\n{judge_name}", parent=self)
+            return
+
+        self.cfg["judge_model"] = judge_name
+        self.cfg["judge_mode"]  = self._judge_mode_var.get()
+        save_config(self.cfg)
+
+        llama_path = self._llama_var.get().strip()
+        params = self._collect_params()
+        if params is None:
+            return
+
+        judge_params = dict(params)
+        judge_params["max_tokens"] = max(params["max_tokens"], 512)
+
+        mode          = self._judge_mode_var.get()
+        batch_results = self._batch_run_results
+        system_prompt = self._judge_system_prompt
+        extra_args    = self._extra_var.get().strip()
+        total_cases   = len(batch_results)
+
+        self._judge_running = True
+        self._judge_btn.configure(state="disabled", text="Judging…")
+        self._judge_status.configure(text="", text_color="#888888")
+        self._judge_log.configure(state="normal")
+        self._judge_log.delete("1.0", "end")
+        self._judge_log.configure(state="disabled")
+
+        def _log(text: str) -> None:
+            def _do() -> None:
+                self._judge_log.configure(state="normal")
+                self._judge_log.insert("end", text + "\n")
+                self._judge_log.see("end")
+                self._judge_log.configure(state="disabled")
+            self.after(0, _do)
+
+        def worker() -> None:
+            from .judge import run_judge_all, run_judge_pairwise
+            total_wins: dict[str, int] = {}
+            try:
+                for ci, case in enumerate(batch_results):
+                    if self._stop_requested:
+                        break
+
+                    ok = [m for m in case["models"] if m.get("success") and m.get("output")]
+                    if len(ok) < 2:
+                        continue
+
+                    self.after(0, lambda i=ci: self._judge_status.configure(
+                        text=f"Case {i+1}/{total_cases}"))
+                    _log(f"\n── Case {ci+1}/{total_cases}: {case['case_id']} ──")
+                    inp = case["user_input"]
+                    _log(f"   {inp[:80]}{'…' if len(inp) > 80 else ''}")
+
+                    if mode == "All at once":
+                        result = run_judge_all(
+                            llama_path=llama_path,
+                            judge_model_path=judge_path,
+                            system_prompt=system_prompt,
+                            user_input=case["user_input"],
+                            results=ok,
+                            params=judge_params,
+                            extra_args=extra_args,
+                        )
+                        winner = result.get("winner")
+                    else:
+                        result = run_judge_pairwise(
+                            llama_path=llama_path,
+                            judge_model_path=judge_path,
+                            system_prompt=system_prompt,
+                            user_input=case["user_input"],
+                            results=ok,
+                            params=judge_params,
+                            extra_args=extra_args,
+                            on_match_done=lambda *_: None,
+                            stop_flag=lambda: self._stop_requested,
+                        )
+                        winner = result.get("winner")
+
+                    if winner:
+                        total_wins[winner] = total_wins.get(winner, 0) + 1
+                        _log(f"   → Winner: {winner}")
+                    else:
+                        _log("   → Unclear")
+
+                if total_wins:
+                    all_names = [m["name"] for m in batch_results[0]["models"]
+                                 if m.get("success") and m.get("output")]
+                    for n in all_names:
+                        total_wins.setdefault(n, 0)
+
+                    max_w = max(total_wins.values()) or 1
+                    scores = {n: int(w / max_w * 100) for n, w in total_wins.items()}
+                    winner = max(total_wins, key=total_wins.get)
+                    wins_label = {n: f"{w}/{total_cases} wins" for n, w in total_wins.items()}
+                    self._judge_last_wins_label = wins_label
+
+                    def _update_lb(s=scores, w=winner) -> None:
+                        self._judge_last_scores = s
+                        self._judge_last_winner = w
+                        self._redraw_judge_leaderboard()
+                    self.after(0, _update_lb)
+                    self.after(0, lambda w=winner: self._judge_status.configure(
+                        text=f"Winner: {w} ({total_wins[w]}/{total_cases} cases)",
+                        text_color="#c8a000"))
+
+                    _log("\n── Leaderboard ──")
+                    for n, w in sorted(total_wins.items(), key=lambda x: -x[1]):
+                        _log(f"   {n}: {w}/{total_cases} wins")
+
+            except Exception:
+                log.exception("Batch judge worker exception")
+                self.after(0, lambda: self._judge_status.configure(
+                    text="Internal error — see log", text_color="#cc4444"))
+            finally:
+                self._judge_running = False
+                self.after(0, lambda: self._judge_btn.configure(
+                    state="normal", text="⚖ Judge All Cases"))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ── Judge tab ─────────────────────────────────────────────────────────────
 
@@ -984,11 +1096,16 @@ class App(ctk.CTk):
 
         self._judge_model_combo = ctk.CTkComboBox(
             ctrl, values=display_names, width=260, font=_FONT_SMALL)
-        if display_names:
+        saved_judge = self.cfg.get("judge_model", "")
+        saved_path = self._judge_model_paths.get(saved_judge, "")
+        if saved_judge and saved_judge in display_names and Path(saved_path).is_file():
+            self._judge_model_combo.set(saved_judge)
+        elif display_names:
             self._judge_model_combo.set(display_names[0])
         self._judge_model_combo.pack(side="left", padx=(0, 10))
 
-        self._judge_mode_var = ctk.StringVar(value="Pairwise")
+        saved_mode = self.cfg.get("judge_mode", "Pairwise")
+        self._judge_mode_var = ctk.StringVar(value=saved_mode)
         ctk.CTkSegmentedButton(
             ctrl, values=["All at once", "Pairwise"],
             variable=self._judge_mode_var, font=_FONT_SMALL,
@@ -1016,6 +1133,9 @@ class App(ctk.CTk):
         self._judge_log = ctk.CTkTextbox(
             tab, wrap="word", state="disabled", font=_FONT_MONO)
         self._judge_log.grid(row=2, column=0, sticky="nsew", padx=8, pady=(4, 8))
+
+        if self._auto_judge_var.get():
+            self.after(0, self._on_judge_run)
 
     def _redraw_judge_leaderboard(self) -> None:
         if not self._judge_last_scores:
@@ -1060,8 +1180,14 @@ class App(ctk.CTk):
         judge_name = self._judge_model_combo.get()
         judge_path = self._judge_model_paths.get(judge_name, "")
         if not judge_path or not Path(judge_path).is_file():
+            self.cfg.pop("judge_model", None)
+            save_config(self.cfg)
             messagebox.showerror("Judge", f"Model file not found:\n{judge_name}", parent=self)
             return
+
+        self.cfg["judge_model"] = judge_name
+        self.cfg["judge_mode"]  = self._judge_mode_var.get()
+        save_config(self.cfg)
 
         llama_path = self._llama_var.get().strip()
         params = self._collect_params()
@@ -1194,68 +1320,18 @@ class App(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    # ── Export ────────────────────────────────────────────────────────────────
-
-    def _on_export(self) -> None:
-        if not self._last_run:
-            return
-        path = filedialog.asksaveasfilename(
-            title="Export results",
-            defaultextension=".md",
-            filetypes=[("Markdown", "*.md"), ("Text", "*.txt")],
-        )
-        if not path:
-            return
-
-        run = self._last_run
-        params = run["params"]
-        ts = run["timestamp"]
-        lines: list[str] = [
-            f"# LLM Benchmark — {ts}",
-            "",
-            f"**System prompt:** {run['system_prompt'][:200] or '—'}",
-            f"**User input:** {run['user_input'][:200] or '—'}",
-            "",
-            "## Parameters",
-            "",
-            "| Key | Value |",
-            "|-----|-------|",
-        ]
-        for k, v in params.items():
-            lines.append(f"| {k} | {v} |")
-
-        lines += [
-            "",
-            "## Results",
-            "",
-            "| Model | Elapsed | tok/s | Tokens | Status |",
-            "|-------|---------|-------|--------|--------|",
-        ]
-        for m in run["models"]:
-            tps  = f"{m['tps']:.1f}" if m.get("tps") else "—"
-            tok  = str(m["n_tokens"]) if m.get("n_tokens") else "—"
-            ok   = "✓" if m.get("success") else "✗"
-            lines.append(
-                f"| {m['name']} | {m['elapsed']:.1f}s | {tps} | {tok} | {ok} |")
-
-        lines += ["", "## Outputs", ""]
-        for m in run["models"]:
-            lines.append(f"### {m['name']}")
-            lines.append("")
-            lines.append("```")
-            lines.append(m.get("output", ""))
-            lines.append("```")
-            lines.append("")
-
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-        log.info("Results exported to %s", path)
-
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _copy(self, tb: ctk.CTkTextbox) -> None:
         self.clipboard_clear()
         self.clipboard_append(tb.get("1.0", "end").strip())
+
+    def _copy_model_name(self, lbl: ctk.CTkLabel, name: str) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(name)
+        orig_color = lbl.cget("text_color")
+        lbl.configure(text="✓ Copied!", text_color="#44aa44")
+        self.after(1200, lambda: lbl.configure(text=name, text_color=orig_color))
 
     def _save_settings(self) -> None:
         self.cfg["llama_path"]     = self._llama_var.get()
@@ -1263,6 +1339,7 @@ class App(ctk.CTk):
         self.cfg["nlp_models_dir"] = self._nlp_dir_var.get()
         self.cfg["extra_args"]     = self._extra_var.get()
         self.cfg["chat_mode"]      = self._chat_mode_var.get()
+        self.cfg["auto_judge"]     = self._auto_judge_var.get()
         try:
             self.cfg["params"] = {
                 "temperature":    float(self._temp_var.get()),
